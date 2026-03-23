@@ -1,52 +1,44 @@
-#pragma comment(linker, "/entry:WinMainCRTStartup /subsystem:console")
+ï»¿#pragma comment(linker, "/entry:WinMainCRTStartup /subsystem:console")
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
+#include <stdio.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
-// DirectX Àü¿ª º¯¼ö
+// ===================== DirectX =====================
 ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* g_pImmediateContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
+ID3D11Buffer* g_pVBuffer = nullptr;
 
-// Á¤Á¡ ±¸Á¶Ã¼
+// ===================== êµ¬ì¡°ì²´ =====================
 struct Vertex {
     float x, y, z;
     float r, g, b, a;
 };
 
-// position°ú speed¸¦ °ü¸®ÇÏ±â À§ÇÑ x, y º¯¼ö°¡ ´ã±ä ±¸Á¶Ã¼
-struct Vector2 {  // (Vector2´Â ´Ü¼øÈ÷ "x, y¸¦ ¹­Àº ÀÚ·áÇü"ÀÌ¶ó´Â ÀÇ¹Ì¶ó¼­, À§Ä¡(position)³ª ¼Óµµ(speed) °°Àº 2Â÷¿ø µ¥ÀÌÅÍ¸¦ °ü¸®ÇÒ ¶§ Àç»ç¿ëÇÒ ¼ö ÀÖÀ½.)
-    float x;
-    float y;
+struct Vector2 {
+    float x, y;
 };
 
-// °ÔÀÓ ¿ÀºêÁ§Æ® ±¸Á¶Ã¼ ¸¸µé±â £¨À§Ä¡ º¯¼ö µî ¼±¾ð£©
 struct GameObject {
-    // Vertex vertices[12];   // Á¤Á¡ µ¥ÀÌÅÍ´Â ±×³É µû·Î °ü¸®ÇÏ±â·Î ÇßÀ½. ¿ÀºêÁ§Æ®¸¶´Ù Á¤Á¡ ¼ö°¡ ´Ù¸£´Ï±î..
-	Vector2 position;       // À§Ä¡ (x, y)
-	Vector2 speed;          // ¼Óµµ (x, y)
-
-    // »ý¼ºÀÚ: ¿ÀºêÁ§Æ®°¡ ¸¸µé¾îÁú ¶§ ÀÚµ¿À¸·Î È£ÃâµÊ
-    GameObject() {
-        position = { 0.0f, 0.0f };
-        speed = { 0.001f, 0.0f };
-    }
-
+    Vector2 position;
 };
 
-// º°(Ä³¸¯ÅÍ) ¼±¾ð
-GameObject star;
+GameObject star = { {0.0f, 0.0f} };
 
-// º° °ü·Ã º¯¼öµé ÃÊ±âÈ­ -> ³ñ! Àü¿ª ¿µ¿ª¿¡¼­ ½ÇÇà¹®Àº ºÒ°¡´É (±¸Á¶Ã¼ ¾È¿¡¼­ ÇÏÀÚ.)
-//star.position = { 0.0f, 0.0f }; 
-//star.speed = { 0.001f, 0.0f };
+// ===================== ìž…ë ¥ =====================
+struct GameContext {
+    int isRunning;
+    int KeyLeft;
+    int KeyRight;
+} g_game = { 1,0,0 };
 
-// ¼ÎÀÌ´õ ¼Ò½º
+// ===================== ì…°ì´ë” =====================
 const char* shaderSource = R"(
 struct VS_INPUT { float3 pos : POSITION; float4 col : COLOR; };
 struct PS_INPUT { float4 pos : SV_POSITION; float4 col : COLOR; };
@@ -59,108 +51,105 @@ PS_INPUT VS(VS_INPUT input) {
 float4 PS(PS_INPUT input) : SV_Target { return input.col; }
 )";
 
-// °ÔÀÓ »óÅÂ ±¸Á¶Ã¼
-typedef struct {
-    int isRunning;
-    int KeyLeft;
-    int KeyRight;
-} GameContext;
+// ===================== Update =====================
+void Update(GameContext* ctx)
+{
+    // ìž…ë ¥ ì²˜ë¦¬
+    if (ctx->KeyLeft)  star.position.x -= 0.00005f;
+    if (ctx->KeyRight) star.position.x += 0.00005f;
 
-GameContext g_game = { 1, 0, 0 }; // ½ÇÇà »óÅÂ. ½ÇÇà Áß, Å° »óÅÂ´Â 0À¸·Î ÃÊ±âÈ­;
+    // ê²½ê³„ ì œí•œ
+    if (star.position.x > 0.8f) star.position.x = 0.8f;
+    if (star.position.x < -0.8f) star.position.x = -0.8f;
 
-// --- 1. ÀÔ·Â ´Ü°è ---
-void ProcessInput(GameContext* ctx, MSG* msg) {
-    if (msg->message == WM_QUIT) {
-        ctx->isRunning = 0;
-    }
+    // ê¸°ì¡´ ë²„í¼ ì œê±°
+    if (g_pVBuffer) g_pVBuffer->Release();
+
+    // â­ ë³„ (ì‚¼ê°í˜• 2ê°œ)
+    Vertex vertices[] = {
+        { 0.0f + star.position.x,  0.2f + star.position.y, 0.5f, 1,1,0,1 },
+        { 0.1f + star.position.x, -0.1f + star.position.y, 0.5f, 1,1,0,1 },
+        { -0.1f + star.position.x, -0.1f + star.position.y, 0.5f, 1,1,0,1 },
+
+        { 0.0f + star.position.x, -0.2f + star.position.y, 0.5f, 1,1,0,1 },
+        { -0.1f + star.position.x,  0.1f + star.position.y, 0.5f, 1,1,0,1 },
+        { 0.1f + star.position.x,  0.1f + star.position.y, 0.5f, 1,1,0,1 },
+    };
+
+    D3D11_BUFFER_DESC bd = {};
+    bd.ByteWidth = sizeof(vertices);
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = vertices;
+
+    g_pd3dDevice->CreateBuffer(&bd, &initData, &g_pVBuffer);
 }
 
-// --- 2. ¾÷µ¥ÀÌÆ® ´Ü°è ---
-void Update(GameContext* ctx) {
-    // Å° ÀÔ·Â »óÅÂ ¹Ý¿µ
-    if (ctx->KeyLeft) {
-        star.position.x -= 0.01f; // ¿ÞÂÊÀ¸·Î ÀÌµ¿
-    }
-    if (ctx->KeyRight) {
-        star.position.x += 0.01f; // ¿À¸¥ÂÊÀ¸·Î ÀÌµ¿
-    }
-
-    // ±âÁ¸ ¼Óµµ ±â¹Ý ÀÌµ¿
-    star.position.x += star.speed.x;
-    star.position.y += star.speed.y;
-
-    // È­¸é °æ°è Ã¼Å©
-    if (star.position.x > 0.5f) star.position.x = 0.5f;
-    if (star.position.x < -0.5f) star.position.x = -0.5f;
-    if (star.position.y > 0.5f) star.position.y = 0.5f;
-    if (star.position.y < -0.5f) star.position.y = -0.5f;
-}
-
-// --- 3. Ãâ·Â ´Ü°è ---
-void Render(ID3D11Buffer* pVBuffer, ID3D11InputLayout* pInputLayout,
-    ID3D11VertexShader* vShader, ID3D11PixelShader* pShader) {
-    float clearColor[] = { 0.1f, 0.2f, 0.3f, 1.0f };
+// ===================== Render =====================
+void Render(ID3D11InputLayout* layout,
+    ID3D11VertexShader* vs,
+    ID3D11PixelShader* ps)
+{
+    float clearColor[] = { 0.1f,0.2f,0.3f,1 };
     g_pImmediateContext->ClearRenderTargetView(g_pRenderTargetView, clearColor);
 
     g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
-    D3D11_VIEWPORT vp = { 0,0,800,600,0.0f,1.0f };
+
+    D3D11_VIEWPORT vp = { 0,0,800,600,0,1 };
     g_pImmediateContext->RSSetViewports(1, &vp);
 
-    g_pImmediateContext->IASetInputLayout(pInputLayout);
     UINT stride = sizeof(Vertex), offset = 0;
-    g_pImmediateContext->IASetVertexBuffers(0, 1, &pVBuffer, &stride, &offset);
+    g_pImmediateContext->IASetVertexBuffers(0, 1, &g_pVBuffer, &stride, &offset);
+    g_pImmediateContext->IASetInputLayout(layout);
     g_pImmediateContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    g_pImmediateContext->VSSetShader(vShader, nullptr, 0);
-    g_pImmediateContext->PSSetShader(pShader, nullptr, 0);
+    g_pImmediateContext->VSSetShader(vs, nullptr, 0);
+    g_pImmediateContext->PSSetShader(ps, nullptr, 0);
 
-    g_pImmediateContext->Draw(12, 0); // 12°³ÀÇ Á¤Á¡ ¡æ »ï°¢Çü 4°³
+    g_pImmediateContext->Draw(6, 0);
     g_pSwapChain->Present(0, 0);
 }
 
-// À©µµ¿ì ¸Þ½ÃÁö Ã³¸®
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    switch (message) {
-        case WM_KEYDOWN:
-            if (wParam == VK_LEFT || wParam == 'A') g_game.KeyLeft = 1;
-            if (wParam == VK_RIGHT || wParam == 'D') g_game.KeyRight = 1;
-            if (wParam == VK_ESCAPE || wParam == 'Q') {
-                PostQuitMessage(0);
-            }
-            break;
+// ===================== ìž…ë ¥ ì²˜ë¦¬ =====================
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_KEYDOWN:
+        if (wParam == VK_LEFT || wParam == 'A') g_game.KeyLeft = 1;
+        if (wParam == VK_RIGHT || wParam == 'D') g_game.KeyRight = 1;
+        break;
 
-        case WM_KEYUP:
-            if (wParam == VK_LEFT || wParam == 'A') g_game.KeyLeft = 0;
-            if (wParam == VK_RIGHT || wParam == 'D') g_game.KeyRight = 0;
-            break;
-
+    case WM_KEYUP:
+        if (wParam == VK_LEFT || wParam == 'A') g_game.KeyLeft = 0;
+        if (wParam == VK_RIGHT || wParam == 'D') g_game.KeyRight = 0;
+        break;
 
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
-    default:
-        return DefWindowProc(hWnd, message, wParam, lParam);
     }
-    return 0;
+    return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-// WinMain
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
-    // À©µµ¿ì Å¬·¡½º µî·Ï
+// ===================== WinMain =====================
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
+{
     WNDCLASSEX wc = { sizeof(WNDCLASSEX) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.lpszClassName = L"DX11Win32Class";
+    wc.lpszClassName = L"DX";
     RegisterClassEx(&wc);
 
-    // À©µµ¿ì »ý¼º
-    HWND hWnd = CreateWindow(L"DX11Win32Class", L"DirectX GameLoop ¿¹Á¦",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+    HWND hWnd = CreateWindow(L"DX", L"DX11 Game",
+        WS_OVERLAPPEDWINDOW, 100, 100, 800, 600,
         nullptr, nullptr, hInstance, nullptr);
+
     ShowWindow(hWnd, nCmdShow);
 
-    // DirectX ÃÊ±âÈ­
+    // DX ì´ˆê¸°í™”
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 1;
     sd.BufferDesc.Width = 800;
@@ -172,116 +161,52 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     sd.Windowed = TRUE;
 
     D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-        nullptr, 0, D3D11_SDK_VERSION, &sd, &g_pSwapChain,
-        &g_pd3dDevice, nullptr, &g_pImmediateContext);
+        nullptr, 0, D3D11_SDK_VERSION,
+        &sd, &g_pSwapChain, &g_pd3dDevice, nullptr, &g_pImmediateContext);
 
-    ID3D11Texture2D* pBackBuffer;
-    g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&pBackBuffer);
-    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
-    pBackBuffer->Release();
+    ID3D11Texture2D* backBuffer;
+    g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
+    g_pd3dDevice->CreateRenderTargetView(backBuffer, nullptr, &g_pRenderTargetView);
+    backBuffer->Release();
 
-    // ¼ÎÀÌ´õ ÄÄÆÄÀÏ
+    // ì…°ì´ë”
     ID3DBlob* vsBlob, * psBlob;
     D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr,
         "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
     D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr,
         "PS", "ps_4_0", 0, 0, &psBlob, nullptr);
 
-    ID3D11VertexShader* vShader;
-    ID3D11PixelShader* pShader;
-    g_pd3dDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vShader);
-    g_pd3dDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &pShader);
+    ID3D11VertexShader* vs;
+    ID3D11PixelShader* ps;
 
-    // Input Layout
-    D3D11_INPUT_ELEMENT_DESC layout[] = {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
-          D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
-          D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    };
-    ID3D11InputLayout* pInputLayout;
-    g_pd3dDevice->CreateInputLayout(layout, 2,
-        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &pInputLayout);
+    g_pd3dDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs);
+    g_pd3dDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps);
 
-    Vertex vertices[] = {
-        // Å« º° (Å×µÎ¸®¿ë, °ËÀº»ö)
-        { -0.00001f + star.position.x,  0.1901f + star.position.y, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f },  // À§ÂÊ
-        {  0.11f + star.position.x, -0.1099f + star.position.y, 0.5f, 0.0f, 0.0f, 0.0f,1.0f },  // ¿À¸¥ÂÊ ¾Æ·¡
-        { -0.11f + star.position.x, -0.1099f + star.position.y, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f },  // ¿ÞÂÊ ¾Æ·¡
-
-        { -0.00001f + star.position.x, -0.2119f + star.position.y, 0.5f, 0.0f,0.0f,0.0f,1.0f },  // ¾Æ·¡ÂÊ
-        { -0.11f + star.position.x,  0.0881f + star.position.y, 0.5f, 0.0f,0.0f,0.0f,1.0f },  // ¿ÞÂÊ À§
-        {  0.11f + star.position.x,  0.0881f + star.position.y, 0.5f, 0.0f,0.0f,0.0f,1.0f },  // ¿À¸¥ÂÊ À§
-
-        // À§ÂÊ Á¤»ï°¢Çü (³ë¶õ»ö)
-        {  0.0f + star.position.x,  0.173f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // À§ÂÊ
-        {  0.1f + star.position.x, -0.1f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // ¿À¸¥ÂÊ ¾Æ·¡
-        { -0.1f + star.position.x, -0.1f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // ¿ÞÂÊ ¾Æ·¡
-
-        // ¾Æ·¡ÂÊ Á¤»ï°¢Çü (³ë¶õ»ö)
-        {  0.0f + star.position.x, -0.193f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // ¾Æ·¡ÂÊ
-        { -0.1f + star.position.x,  0.08f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // ¿ÞÂÊ À§
-        {  0.1f + star.position.x,  0.08f + star.position.y, 0.5f, 1.0f,1.0f,0.4f,1.0f },  // ¿À¸¥ÂÊ À§
+    D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
+        { "POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0 },
+        { "COLOR",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,12,D3D11_INPUT_PER_VERTEX_DATA,0 }
     };
 
-	// Á¤Á¡ ¹öÆÛ »ý¼º
-    D3D11_BUFFER_DESC bd = { sizeof(vertices), D3D11_USAGE_DEFAULT,
-        D3D11_BIND_VERTEX_BUFFER, 0, 0, 0 };
-    D3D11_SUBRESOURCE_DATA initData = { vertices, 0, 0 };
-    ID3D11Buffer* pVBuffer;
-    g_pd3dDevice->CreateBuffer(&bd, &initData, &pVBuffer);
+    ID3D11InputLayout* layout;
+    g_pd3dDevice->CreateInputLayout(layoutDesc, 2,
+        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &layout);
 
-    // [Á¤¼® °ÔÀÓ ·çÇÁ]
+    // ===================== ê²Œìž„ ë£¨í”„ =====================
     MSG msg = {};
-    while (g_game.isRunning) {
-        // 1. ÀÔ·Â ´Ü°è (Process Input)
-        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    while (g_game.isRunning)
+    {
+        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT) break;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
-
-            // ¸Þ½ÃÁö°¡ WM_QUITÀÌ¸é °ÔÀÓ Á¾·á
-            if (msg.message == WM_QUIT) {
-                g_game.isRunning = 0;
-            }
         }
-        else {
-            // 2. ¾÷µ¥ÀÌÆ® ´Ü°è (Update)
+        else
+        {
             Update(&g_game);
-            // ¿òÁ÷ÀÓ ·ÎÁ÷ (Ä³¸¯ÅÍ À§Ä¡, Ãæµ¹ ÆÇÁ¤, AI µî)
-
-
-            // 3. Ãâ·Â ´Ü°è (Render)
-            Render(pVBuffer, pInputLayout, vShader, pShader);
-
-            //float clearColor[] = { 0.1f, 0.2f, 0.3f, 1.0f };
-            //g_pImmediateContext->ClearRenderTargetView(g_pRenderTargetView, clearColor);
-
-            //g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
-            //D3D11_VIEWPORT vp = { 0,0,800,600,0.0f,1.0f };
-            //g_pImmediateContext->RSSetViewports(1, &vp);
-
-            //g_pImmediateContext->IASetInputLayout(pInputLayout);
-            //UINT stride = sizeof(Vertex), offset = 0;
-            //g_pImmediateContext->IASetVertexBuffers(0, 1, &pVBuffer, &stride, &offset);
-            //g_pImmediateContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-            //g_pImmediateContext->VSSetShader(vShader, nullptr, 0);
-            //g_pImmediateContext->PSSetShader(pShader, nullptr, 0);
-
-            //g_pImmediateContext->Draw(12, 0); // 6°³ÀÇ Á¤Á¡ ¡æ »ï°¢Çü 2°³
-            //g_pSwapChain->Present(0, 0);
+            Render(layout, vs, ps);
         }
     }
 
-    // ÀÚ¿ø ÇØÁ¦
-    if (pVBuffer) pVBuffer->Release();
-    if (pInputLayout) pInputLayout->Release();
-    if (vShader) vShader->Release();
-    if (pShader) pShader->Release();
-    if (g_pRenderTargetView) g_pRenderTargetView->Release();
-    if (g_pSwapChain) g_pSwapChain->Release();
-    if (g_pImmediateContext) g_pImmediateContext->Release();
-    if (g_pd3dDevice) g_pd3dDevice->Release();
-
-    return (int)msg.wParam;
+    return 0;
 }
