@@ -1,0 +1,268 @@
+#pragma comment(linker, "/entry:WinMainCRTStartup /subsystem:console") // 실행할 때 검은색 콘솔 창도 같이 띄우게 설정 (디버깅용)
+#include <windows.h>      // 윈도우 창을 만들기 위한 기본 도구함
+#include <d3d11.h>        // DirectX 11의 핵심 기능 도구함
+#include <d3dcompiler.h>   // 셰이더(그래픽 계산 프로그램)를 컴파일하는 도구
+#include <stdio.h>        // 표준 입출력 (printf 등)
+#include <chrono>         // 정밀한 시간을 재기 위한 도구 (DeltaTime 계산용)
+#include <vector>         // 물건들을 담아두는 가변 배열 (GameObject 보관용)
+#include <string>         // 문자열 사용
+
+// 필요한 라이브러리 파일들을 연결 (그래픽 카드와 대화하기 위해 필요함)
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3dcompiler.lib")
+
+// ===================== [전역 변수] 프로그램 어디서든 쓰는 공용 도구 =====================
+double g_deltaTime = 0.0;    // 지난 프레임과 지금 프레임 사이의 시간 (컴퓨터 속도 차이를 없애줌)
+bool g_isFullscreen = false; // 현재 전체화면인지 체크하는 변수
+
+ID3D11Device* g_pd3dDevice = nullptr;         // 그래픽 카드(장치) 그 자체
+ID3D11DeviceContext* g_pImmediateContext = nullptr; // 그래픽 카드에 "그려라!"라고 명령을 내리는 통로
+IDXGISwapChain* g_pSwapChain = nullptr;       // 그린 그림을 모니터로 보내주는 교체 장치
+ID3D11RenderTargetView* g_pRenderTargetView = nullptr; // 그림이 그려질 실제 도화지(캔버스)
+
+// ===================== [구조체] 데이터 덩어리 정의 =====================
+struct Vertex { // 점 하나에 들어갈 정보
+    float x, y, z;      // 위치 (좌표)
+    float r, g, b, a;   // 색상 (빨, 녹, 파, 투명도)
+};
+
+// ===================== [요구사항 A] 객체 및 컴포넌트 설계 =====================
+
+class GameObject; // 아래에서 쓸 거니까 미리 이름만 알려줌
+
+// [Component] : 모든 기능 모듈의 부모가 되는 추상 클래스
+class Component {
+public:
+    GameObject* pOwner = nullptr;  // 이 컴포넌트가 부착된 GameObject의 메모리 주소를 저장하는 포인터
+    virtual void Start() = 0;      // 초기화 단계에서 호출되는 가상 함수
+    virtual void Update(float dt) = 0; // 매 프레임 수치 계산을 위해 호출되는 가상 함수
+    virtual void Render() = 0;     // 매 프레임 그리기 명령을 위해 호출되는 가상 함수
+    virtual ~Component() {}        // 죽을 때 정리할 일
+};
+
+// [GameObject] : 위치(Position) 데이터를 보관하고 컴포넌트들을 관리하는 클래스
+class GameObject {
+public:
+    float posX = 0.0f; // 객체의 현재 X 좌표
+    float posY = 0.0f; // 객체의 현재 Y 좌표
+    std::vector<Component*> components; // 이 객체에 포함된 컴포넌트들을 저장하는 컨테이너
+
+    GameObject(float x, float y) : posX(x), posY(y) {} // 생성자: 초기 좌표 설정
+    ~GameObject() { for (auto c : components) delete c; } // 소멸 시 포함된 모든 컴포넌트 메모리 해제
+
+    // 컴포넌트를 GameObject에 등록하고 상호 참조를 설정하는 함수
+    void AddComponent(Component* pComp) {
+        pComp->pOwner = this;      // 컴포넌트의 pOwner 변수에 현재 GameObject의 주소(this)를 전달
+        components.push_back(pComp); // 컨테이너에 추가
+        pComp->Start();            // 컴포넌트의 초기화 함수 실행
+    }
+
+    void Update(float dt) { for (auto c : components) c->Update(dt); }
+    void Render() { for (auto c : components) c->Render(); }
+};
+
+// ===================== [요구사항 B] 실제 부품들 만들기 =====================
+
+// [ShapeRenderer] : 정점 데이터를 생성하고 화면에 출력하는 컴포넌트
+class ShapeRenderer : public Component {
+public:
+    ID3D11Buffer* vertexBuffer = nullptr; // 정점 데이터를 담는 GPU 버퍼
+    float r, g, b; // 출력할 도형의 RGB 색상 값
+
+    ShapeRenderer(float _r, float _g, float _b) : r(_r), g(_g), b(_b) {}
+
+    void Start() override {
+        Vertex vertices[] = {
+        {  0.0f,  0.15f, 0.5f, r, g, b, 1.0f },  // 위쪽 꼭짓점 (y = 0.15)
+        {  0.1f, -0.1f, 0.5f, r, g, b, 1.0f },  // 오른쪽 아래 (x = 0.1, y = -0.1)
+        { -0.1f, -0.1f, 0.5f, r, g, b, 1.0f }   // 왼쪽 아래 (x = -0.1, y = -0.1)
+     };
+
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth = sizeof(vertices);
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA initData = { vertices };
+        g_pd3dDevice->CreateBuffer(&bd, &initData, &vertexBuffer);
+    }
+
+    void Update(float dt) override {}
+
+    void Render() override {
+        // pOwner의 위치 값을 정점 데이터에 더하여 실시간 이동 반영
+        Vertex v[] = {
+            { 0.0f + pOwner->posX,  0.15f + pOwner->posY, 0.5f, r, g, b, 1.0f },
+            { 0.1f + pOwner->posX, -0.1f + pOwner->posY, 0.5f, r, g, b, 1.0f },
+            { -0.1f + pOwner->posX, -0.1f + pOwner->posY, 0.5f, r, g, b, 1.0f }
+        };
+        g_pImmediateContext->UpdateSubresource(vertexBuffer, 0, nullptr, v, 0, 0);
+
+        UINT stride = sizeof(Vertex), offset = 0;
+        g_pImmediateContext->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+        g_pImmediateContext->Draw(3, 0);
+    }
+
+    ~ShapeRenderer() { if (vertexBuffer) vertexBuffer->Release(); }
+};
+
+// [MoveComponent] : 키보드 입력을 감지하고 pOwner의 위치 값을 수정하는 컴포넌트
+class MoveComponent : public Component {
+public:
+    int playerType; // 1: 방향키, 2: WASD
+    float speed = 0.25f; // 이동 속도
+
+    MoveComponent(int type) : playerType(type) {}
+
+    void Start() override {}
+    void Update(float dt) override {
+        float vx = 0, vy = 0;
+        if (playerType == 1) {
+            if (GetAsyncKeyState(VK_LEFT) & 0x8000) vx = -speed;
+            if (GetAsyncKeyState(VK_RIGHT) & 0x8000) vx = speed;
+            if (GetAsyncKeyState(VK_UP) & 0x8000) vy = speed;
+            if (GetAsyncKeyState(VK_DOWN) & 0x8000) vy = -speed;
+        }
+        else {
+            if (GetAsyncKeyState('A') & 0x8000) vx = -speed;
+            if (GetAsyncKeyState('D') & 0x8000) vx = speed;
+            if (GetAsyncKeyState('W') & 0x8000) vy = speed;
+            if (GetAsyncKeyState('S') & 0x8000) vy = -speed;
+        }
+
+        pOwner->posX += vx * (float)g_deltaTime;
+        pOwner->posY += vy * (float)g_deltaTime;
+    }
+    void Render() override {}
+};
+
+// ===================== [셰이더 및 윈도우 프로시저] =====================
+const char* shaderSource = R"(
+struct VS_INPUT { float3 pos : POSITION; float4 col : COLOR; };
+struct PS_INPUT { float4 pos : SV_POSITION; float4 col : COLOR; };
+PS_INPUT VS(VS_INPUT input) {
+    PS_INPUT output; output.pos = float4(input.pos, 1.0f); output.col = input.col;
+    return output;
+}
+float4 PS(PS_INPUT input) : SV_Target { return input.col; }
+)";
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+// ===================== [메인 함수] =====================
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX) };
+    wc.lpfnWndProc = WndProc; wc.hInstance = hInst; wc.lpszClassName = L"DX";
+    RegisterClassEx(&wc);
+    HWND hWnd = CreateWindow(L"DX", L"Ch Engine", WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, nullptr, nullptr, hInst, nullptr);
+    ShowWindow(hWnd, nCmdShow);
+
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sd.BufferCount = 1; sd.BufferDesc.Width = 800; sd.BufferDesc.Height = 600;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1; sd.Windowed = TRUE;
+    D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, nullptr, &g_pImmediateContext);
+
+    ID3D11Texture2D* backBuffer;
+    g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
+    g_pd3dDevice->CreateRenderTargetView(backBuffer, nullptr, &g_pRenderTargetView);
+    backBuffer->Release();
+
+    ID3DBlob* vsBlob, * psBlob;
+    D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
+    D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "PS", "ps_4_0", 0, 0, &psBlob, nullptr);
+    ID3D11VertexShader* vs; ID3D11PixelShader* ps;
+    g_pd3dDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs);
+    g_pd3dDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps);
+
+    D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
+        { "POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0 },
+        { "COLOR",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,12,D3D11_INPUT_PER_VERTEX_DATA,0 }
+    };
+    ID3D11InputLayout* layout;
+    g_pd3dDevice->CreateInputLayout(layoutDesc, 2, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &layout);
+
+    // [객체 생성]
+    std::vector<GameObject*> gameWorld;
+
+    GameObject* p1 = new GameObject(0.3f, 0.0f);
+    p1->AddComponent(new MoveComponent(1));
+    p1->AddComponent(new ShapeRenderer(1.0f, 0.2f, 0.2f));
+    gameWorld.push_back(p1);
+
+    GameObject* p2 = new GameObject(-0.3f, 0.0f);
+    p2->AddComponent(new MoveComponent(2));
+    p2->AddComponent(new ShapeRenderer(0.2f, 0.7f, 0.8f));
+    gameWorld.push_back(p2);
+
+    // [게임 루프]
+    auto prevTime = std::chrono::high_resolution_clock::now();
+    MSG msg = {};
+    while (true) {
+        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) break;
+            TranslateMessage(&msg); DispatchMessage(&msg);
+        }
+        else {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            g_deltaTime = std::chrono::duration<double>(currentTime - prevTime).count();
+            prevTime = currentTime;
+
+            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) break;
+            if (GetAsyncKeyState('F') & 0x0001) {
+                g_isFullscreen = !g_isFullscreen;
+                g_pSwapChain->SetFullscreenState(g_isFullscreen, nullptr);
+            }
+
+            float clearColor[] = { 0.1f, 0.1f, 0.1f, 1.0f };
+            g_pImmediateContext->ClearRenderTargetView(g_pRenderTargetView, clearColor);
+            g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+
+            D3D11_VIEWPORT vp = { 0, 0, 800, 600, 0, 1 };
+            g_pImmediateContext->RSSetViewports(1, &vp);
+            g_pImmediateContext->IASetInputLayout(layout);
+            g_pImmediateContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            g_pImmediateContext->VSSetShader(vs, nullptr, 0);
+            g_pImmediateContext->PSSetShader(ps, nullptr, 0);
+
+            for (auto obj : gameWorld) {
+                obj->Update((float)g_deltaTime);
+                obj->Render();
+            }
+            g_pSwapChain->Present(0, 0);
+
+            // ===================== [디버깅 콘솔 출력] =====================
+            static int frameCount = 0;
+            static double elapsedTime = 0.0;
+            static int avgFPS = 0;
+
+            frameCount++;
+            elapsedTime += g_deltaTime;
+
+            if (elapsedTime >= 1.0) {
+                avgFPS = frameCount;   // 지난 1초 동안의 프레임 수
+                frameCount = 0;
+                elapsedTime = 0.0;
+            }
+
+            system("cls");
+            printf("========== Ch Engine Debugger ==========\n");
+            printf("[ P1 Position ] X: %.2f, Y: %.2f (Arrow Keys)\n", gameWorld[0]->posX, gameWorld[0]->posY);
+            printf("[ P2 Position ] X: %.2f, Y: %.2f (W,A,S,D Keys)\n", gameWorld[1]->posX, gameWorld[1]->posY);
+            printf("[ Performance ] FPS: %d (DeltaTime: %.6f)\n", avgFPS, g_deltaTime);
+            printf("----------------------------------------------\n");
+            printf("[ System ] ESC: Exit / F: FullScreen Toggle\n");
+            printf("==============================================\n");
+        }
+    }
+
+    for (auto obj : gameWorld) delete obj;
+    layout->Release(); vs->Release(); ps->Release();
+    g_pRenderTargetView->Release(); g_pSwapChain->Release();
+    g_pImmediateContext->Release(); g_pd3dDevice->Release();
+
+    return 0;
+}
